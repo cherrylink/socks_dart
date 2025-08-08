@@ -178,30 +178,36 @@ class SocksSocket with StreamMixin<Uint8List>, SocketMixin, ByteReader {
   }
 
   /// Handle socks command.
-  Future<void> _handleCommand(
-    InternetAddress targetAddress,
-    int targetPort,
-    SocksConnectionType type,
-  ) async {
-    final addressType =
-        AddressType.internetAddressTypeMap[targetAddress.type]!;
-    final rawAddress = targetAddress.rawAddress;
+Future<void> _handleCommand(
+  InternetAddress targetAddress,
+  int targetPort,
+  SocksConnectionType type,
+) async {
+  final addressType = AddressType.internetAddressTypeMap[targetAddress.type]!;
 
-    add(
-      Uint8List.fromList([
-        0x05, // Socks version.
-        type.byte, // Socks connection type.
-        0x00, // Reserved
-        addressType.byte,
-        // Encoding address, if domain adding length at the beginning.
-        if (addressType == AddressType.domain) rawAddress.length,
-        ...rawAddress,
-        // Encoding port as big endian short.
-        (targetPort & 0xff00) >> 8, targetPort & 0x00ff,
-      ]),
-    );
-    await flush();
+  // 准备地址字节
+  late final Uint8List addrBytes;
+  if (addressType == AddressType.domain) {
+    // 用 host 字符串，去掉意外的 NUL，再按 UTF-8 编码
+    final host = targetAddress.address.replaceAll('\x00', '');
+    final bytes = utf8.encode(host);
+    addrBytes = Uint8List.fromList([bytes.length, ...bytes]); // LEN + DOMAIN
+  } else {
+    // IPv4/IPv6 直接用 rawAddress
+    addrBytes = targetAddress.rawAddress;
   }
+
+  add(Uint8List.fromList([
+    0x05,                // VER
+    type.byte,           // CMD
+    0x00,                // RSV
+    addressType.byte,    // ATYP
+    ...addrBytes,        // 注意：域名分支已含 LEN；IP 分支没有 LEN
+    (targetPort & 0xff00) >> 8,
+    targetPort & 0x00ff,
+  ]));
+  await flush();
+}
 
   Future<SocksCommandResponse> _handleCommandResponse(SocksConnectionType type) async {
     final version = await readUint8();
